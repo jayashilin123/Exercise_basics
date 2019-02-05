@@ -1,0 +1,54 @@
+---
+title: "Risk Stratification"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Load the cleaned data
+```{r}
+data <- read.csv("data/data_cleaned.csv", header=TRUE, 
+                  na.strings = c("NA","na",""," ","?"), stringsAsFactors = FALSE)
+```
+
+save the ID of patients and Remove the ID before analysis
+```{r}
+ID <- data$ID
+data <- data[2:42]
+```
+
+Format the readmitted variable
+```{r}
+data$readmitted[data$readmitted == "YES"] <- "1"
+data$readmitted[data$readmitted == "NO"] <- "0"
+table(data$readmitted)
+data$readmitted <- as.factor(data$readmitted)
+```
+
+Sampling down the data
+```{r}
+
+set.seed(123)
+data_svm <- data[sample(nrow(data), nrow(data)*0.25, replace = F),]
+
+# split data into train and test in 0.75:0.25 ratio, respectively
+set.seed(123)
+
+indices <- sample(2, nrow(data_svm), replace = T, prob = c(0.75, 0.25))
+train <- data_svm[indices == 1, ]
+test <- data_svm[indices == 2, ]
+```
+ 
+Try SVM
+```{r include=FALSE}
+library("kernlab")
+library("caret")
+```
+
+```{r}
+svm.linear <- ksvm(readmitted~., data=train, scale =FALSE, kernel="vanilladot")
+svm.predict <- predict(svm.linear, test[,-1])
+confusionMatrix(svm.predict, test$readmitted)
+```

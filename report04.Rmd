@@ -1,0 +1,160 @@
+---
+title: "Risk Stratification"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Risk stratification of diabetes patients with random forest
+```{r}
+# Load the cleaned data
+data <- read.csv("data/data_cleaned.csv", header=TRUE, 
+                 na.strings = c("NA","na",""," ","?"), stringsAsFactors = FALSE)
+# save the ID of patients
+ID <- data$ID
+# Remove the ID before analysis
+data <- data[2:42]
+table(data$readmitted)
+data$readmitted <- as.factor(data$readmitted)
+```
+
+```{r}
+# sampling down the data
+set.seed(123)
+data_rf <- data[sample(nrow(data), nrow(data)*0.25, replace = F),]
+
+set.seed(123)
+indices <- sample(2, nrow(data_rf), replace = T, prob = c(0.75, 0.25))
+train <- data_rf[indices == 1, ]
+test <- data_rf[indices == 2, ]
+```
+
+```{r include=FALSE}
+library(randomForest)
+library(caret)
+library(dplyr)
+```
+
+```{r}
+set.seed(123)
+rf.model <- randomForest(readmitted ~ ., data = train, do.trace = T)
+rf.predict <- predict(rf.model, test[,-1], type = "class")
+confusionMatrix(rf.predict, test$readmitted)
+```
+
+Random forest gives better accuracy. Find out the optimal probability cutoff. Create a function to find the accuracy, sensitivity and specificity for a given cutoff.
+```{r}
+rf_predict <- data.frame(predict(rf.model, test[,-1], type = "prob"))
+predicted_readmission <- factor(ifelse(rf_predict$YES >= 0.5, "YES", "NO"))
+perform_fn <- function(cutoff) 
+{
+  predicted_readmission <- factor(ifelse(rf_predict$YES >= cutoff, "YES", "NO"))
+  conf <- confusionMatrix(predicted_readmission, test$readmitted, positive = "YES")
+  acc <- conf$overall[1]
+  sens <- conf$byClass[1]
+  spec <- conf$byClass[2]
+  out <- t(as.matrix(c(sens, spec, acc))) 
+  colnames(out) <- c("sensitivity", "specificity", "accuracy")
+  return(out)
+}
+summary(rf_predict$YES)
+summary(rf_predict$NO)
+# Creating cutoff values from 0.01 to 0.95 for plotting and initiallizing a matrix of 100 X 3.
+s = seq(.01,.95,length=100)
+OUT = matrix(0,100,3)
+for(i in 1:100){
+  OUT[i,] = perform_fn(s[i])
+} 
+
+plot(s, OUT[,1],xlab="Cutoff",ylab="Value",cex.lab=1.5,cex.axis=1.5,ylim=c(0,1),type="l",
+     lwd=2,axes=FALSE,col=2)
+axis(1,seq(0,1,length=5),seq(0,1,length=5),cex.lab=1.5)
+axis(2,seq(0,1,length=5),seq(0,1,length=5),cex.lab=1.5)
+lines(s,OUT[,2],col="darkgreen",lwd=2)
+lines(s,OUT[,3],col=4,lwd=2)
+box()
+legend("topright",col=c(2,"darkgreen",4),lwd=c(1,1,1),
+       c("Sensitivity","Specificity","Accuracy"), cex=0.4)
+```
+
+```{r}
+cutoff <- s[which.min(abs(OUT[,1]-OUT[,2]))]
+cutoff
+```
+
+Confusion matrix for the cutoff value
+```{r}
+test_cutoff_readmission <- factor(ifelse(rf_predict$YES >= cutoff, "YES", "NO"))
+conf_final <- confusionMatrix(test_cutoff_readmission, test$readmitted, positive = "YES")
+acc <- conf_final$overall[1]
+sens <- conf_final$byClass[1]
+spec <- conf_final$byClass[2]
+acc
+sens
+spec
+```
+
+Checking important variables
+```{r}
+varImpPlot(rf.model)
+```
+
+```{r}
+#Checking distribution of yeses and nos
+Id_index <- as.numeric(row.names(test))
+PATIENT_ID <- ID[Id_index]
+
+results <- data.frame(PATIENT_ID, rf_predict)
+                      
+head(results)
+hist(results$NO)
+hist(results$YES)
+```
+
+Stratification
+```{r}
+low_threshold <- 0.3
+high_threshold <- 0.7
+results$risk_bucket <- character(length = nrow(results))
+results$risk_bucket <- apply(results, 1, function(x){
+  if(x[3] < low_threshold)
+    x[4] <- "LOW"
+  else if(x[3] > high_threshold)
+    x[4] <- "HIGH"
+  else
+    x[4] <- "MEDIUM"
+})
+head(results)
+```
+
+```{r}
+ggplot(data = results, aes(risk_bucket, fill=risk_bucket)) + 
+  geom_bar() +
+  theme(legend.position = "none") +
+  labs(x="Risk bucket", y="Number of patients")
+
+prop.table(table(results$risk_bucket))
+```
+
+```{r}
+# low risk patients
+low_risk <- subset(results, results$risk_bucket == "LOW")
+low_risk <- low_risk %>% arrange(YES)
+head(low_risk)
+```
+
+```{r}
+# high risk patients
+high_risk <- subset(results, results$risk_bucket == "HIGH")
+high_risk <- high_risk %>% arrange(desc(YES))
+head(high_risk)
+```
+
+```{r}
+# medium risk
+medium_risk <- subset(results, results$risk_bucket == "MEDIUM")
+medium_risk <- medium_risk %>% arrange(desc(YES))
+head(medium_risk)
+```

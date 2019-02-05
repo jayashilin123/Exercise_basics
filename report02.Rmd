@@ -1,0 +1,265 @@
+---
+title: "Risk Stratification"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Risk stratification of diabetic patients for readmission
+
+Logistic Regression
+```{r loading-libs, message=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(stringr)
+library(caTools)
+library(rpart)
+library(caret)
+library(car)
+library(MASS)
+```
+
+
+Load the cleaned data
+```{r}
+data <- read.csv("data/data_cleaned.csv", header=TRUE, 
+                 na.strings = c("NA","na",""," ","?"), stringsAsFactors = FALSE)
+```
+
+
+```{r}
+# save the ID of patients
+ID <- data$ID
+# Remove the ID before analysis
+data <- data[2:42]
+```
+
+```{r}
+# change readmitted to numeric column
+table(data$readmitted)
+data$readmitted <- as.factor(data$readmitted)
+```
+
+```{r}
+# splitting the data between train and test
+set.seed(100)
+
+indices = sample.split(data$readmitted, SplitRatio = 0.7)
+
+train = data[indices,]
+
+test = data[!(indices),]
+```
+
+### Logistic Regression
+
+```{r echo=TRUE, warning=FALSE}
+model_1 <- glm(readmitted ~ ., data = train, family = "binomial")
+```
+
+```{r echo=TRUE}
+#Initial model summary
+summary(model_1)
+```
+
+ Stepwise selection is used for modeling: stepAIC(model_1, direction="both")
+```{r eval=FALSE, include=FALSE}
+# Stepwise selection
+library("MASS")
+model_2<- stepAIC(model_1, direction="both")
+```
+
+```{r eval=FALSE, include=FALSE}
+summary(model_2)
+library(car)
+sort(vif(model_2))
+```
+
+ # Redundant and correlated variables are removed with the help of p-value and vif values to reach significant variables and low vif values. This is the final model
+ 
+```{r echo=TRUE}
+model_16 <- glm(formula = readmitted ~ gender + time_in_hospital + num_lab_procedures + 
+                  num_procedures + number_outpatient + number_emergency + number_inpatient + 
+                  number_diagnoses + diabetesMed +
+                  raceOther + age5 + age6 + admission_type_id3 + 
+                  admission_type_id5 +
+                  admission_source_id3 + 
+                  A1CresultNone + insulinSteady + 
+                  comorbidity1 + comorbidity2 + comorbidity3, family = "binomial", 
+                data = train)
+```
+
+```{r}
+summary(model_16)
+sort(vif(model_16))
+```
+
+```{r}
+# Final Model With only significant variables in the model
+final_model <- model_16
+```
+
+
+### Logistic regression - Model Evaluation
+
+final_model taken was model_16
+Predicted probabilities of readmitted for test data
+
+```{r}
+test_pred = predict(final_model, type = "response", 
+                     newdata = test)
+```
+
+```{r}
+summary(test_pred)
+```
+
+Using the probability cutoff of 50% evaluate the predicted and true values
+```{r}
+test_pred_readmitted <- factor(ifelse(test_pred >= 0.50, "YES", "NO"))
+test_actual_readmitted <- factor(test$readmitted) 
+test_conf <- confusionMatrix(test_pred_readmitted, test_actual_readmitted, positive = "YES")
+test_conf
+```
+
+Sensitivity is very low. So let's choose a different cutoff value
+ 
+To find the optimal probalility cutoff, create a function to find the accuracy, sensitivity and specificity for a given cutoff
+
+```{r warning=FALSE}
+perform_fn <- function(cutoff) 
+ {
+   predicted_readmitted <- factor(ifelse(test_pred >= cutoff, "YES", "NO"))
+   conf <- confusionMatrix(predicted_readmitted, test_actual_readmitted, positive = "YES")
+   acc <- conf$overall[1]
+   sens <- conf$byClass[1]
+   spec <- conf$byClass[2]
+   out <- t(as.matrix(c(sens, spec, acc))) 
+   colnames(out) <- c("sensitivity", "specificity", "accuracy")
+   return(out)
+ }
+# Creating cutoff values from 0.01 to 0.80 for plotting and initiallizing a matrix of 100 X 3.
+s = seq(.01,.80,length=100)
+OUT = matrix(0,100,3)
+for(i in 1:100)
+ {
+   OUT[i,] = perform_fn(s[i])
+ } 
+ 
+plot(s, OUT[,1],xlab="Cutoff",ylab="Value",cex.lab=1.5,cex.axis=1.5,ylim=c(0,1),type="l",lwd=2,axes=FALSE,col=2)
+axis(1,seq(0,1,length=5),seq(0,1,length=5),cex.lab=1.5)
+axis(2,seq(0,1,length=5),seq(0,1,length=5),cex.lab=1.5)
+lines(s,OUT[,2],col="darkgreen",lwd=2)
+lines(s,OUT[,3],col=4,lwd=2)
+box()
+legend("topright",col=c(2,"darkgreen",4,"darkred"),
+        lwd=c(1,1,1,1),c("Sensitivity","Specificity","Accuracy"), cex=0.4)
+```
+
+```{r}
+cutoff <- s[which(abs(OUT[,1]-OUT[,2])<0.01)]
+cutoff
+```
+
+```{r}
+# Let's choose a cutoff value of 0.42 for final model
+ 
+ test_cutoff_readmitted <- factor(ifelse(test_pred >= cutoff, "YES", "NO"))
+ 
+ conf_final <- confusionMatrix(test_cutoff_readmitted, test_actual_readmitted, positive = "YES")
+ 
+ acc <- conf_final$overall[1]
+ 
+ sens <- conf_final$byClass[1]
+ 
+ spec <- conf_final$byClass[2]
+ 
+ acc
+ sens
+ spec
+```
+
+```{r}
+test_cutoff_readmitted <- ifelse(test_cutoff_readmitted=="YES",1,0)
+test_actual_readmitted <- ifelse(test_actual_readmitted=="YES",1,0)
+```
+
+Exporting Data for Excel Analysis (KS, Gain, Lift etc)
+```{r}
+myeval <- matrix(nrow = length(test_pred),ncol = 2)
+myeval[,1] <- test_pred
+myeval[,2] <- test_actual_readmitted
+colnames(myeval) <- c("Predicted_Prob","Actual_Labels")
+```
+
+KS -statistic - Test Data
+
+```{r include=FALSE}
+library(ROCR)
+```
+
+
+```{r}
+# on testing  data
+pred_object_test<- prediction(test_cutoff_readmitted, test_actual_readmitted)
+performance_measures_test<- performance(pred_object_test, "tpr", "fpr")
+ks_table_test <- attr(performance_measures_test, "y.values")[[1]] - 
+   (attr(performance_measures_test, "x.values")[[1]])
+max(ks_table_test)
+```
+
+Lift & Gain Chart 
+ 
+```{r include=FALSE}
+ library(dplyr)
+ lift <- function(labels , predicted_prob,groups=10) {
+   
+   if(is.factor(labels)) labels  <- as.integer(as.character(labels ))
+   if(is.factor(predicted_prob)) predicted_prob <- as.integer(as.character(predicted_prob))
+   helper = data.frame(cbind(labels , predicted_prob))
+   helper[,"bucket"] = ntile(-helper[,"predicted_prob"], groups)
+   gaintable = helper %>% group_by(bucket)  %>%
+     summarise_at(vars(labels ), funs(total = n(),
+                                      totalresp=sum(., na.rm = TRUE))) %>%
+     
+     mutate(Cumresp = cumsum(totalresp),
+            Gain=Cumresp/sum(totalresp)*100,
+            Cumlift=Gain/(bucket*(100/groups))) 
+   return(gaintable)
+ }
+```
+
+```{r}
+readmitted_decile = lift(test_actual_readmitted, test_pred, groups = 10)
+readmitted_decile
+```
+ 
+Gain chart
+```{r}
+Gain <- c(0,readmitted_decile$Gain)
+Deciles <- c(0,readmitted_decile$bucket)
+plot(y=Gain,x=Deciles,type ="l",lwd = 2,xlab="Bucket",ylab="Gain",main = "Gain Chart")
+
+Random_Gain <- seq(from=0,to=100,by=10)
+lines(y=Random_Gain,x=Deciles,type ="l",lwd = 2, col="red")
+ 
+Perfect_Gain <- vector(mode = "numeric", length = 11)
+for (i in 2:11){Perfect_Gain[i] <- 100*min(1,129*(i-1)/209)}
+lines(y=Perfect_Gain,x=Deciles,type ="l",lwd = 2, col="darkgreen")
+legend("bottomright",col=c("darkgreen","black","red"),
+       lwd =c(2,2,2,2),c("Perfect Model","Actual Model","Random Model"), cex = 0.4)
+```
+
+Lift chart
+```{r}
+Lift <- Gain/Random_Gain
+Random_Lift <- Random_Gain/Random_Gain
+ 
+plot(y=Lift,x=Deciles,type ="l",ylim=c(0,3.5),lwd = 2,xlab="Bucket",ylab="Lift",main = "Lift Chart",ylim<-c())
+lines(y=Random_Lift,x=Deciles,type ="l",lwd = 2, col="red")
+legend("topright",col=c("black","red"),lwd =c(2,2,2),c("Actual Model","Random Model"), cex = 0.45)
+```
+

@@ -1,0 +1,575 @@
+---
+title: "Risk Stratification"
+author: 
+date: 
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Risk stratification of diabetic patients for readmission
+
+EDA and Feature engineering
+```{r include=FALSE}
+library(ggplot2)
+library(stringr)
+library(dplyr)
+library(stringr)
+library(caTools)
+library(rpart)
+library(caret)
+library(car)
+library(MASS)
+```
+
+
+```{r}
+data <- read.csv("data/diabetic_data_original.csv", header=TRUE, 
+                 na.strings = c("NA","na",""," ","?"), stringsAsFactors = FALSE)
+```
+
+Checking structure of data
+```{r}
+str(data)
+```
+
+Check for NA
+```{r}
+sapply(data, function(x) sum(is.na(x))) 
+```
+
+### Check variable
+```{r}
+# encounter_id
+length(unique(data$encounter_id))
+# 101766 variable, no duplicate
+ #  remove encounterid
+data <- subset(data, select=-c(encounter_id))
+```
+
+
+```{r}
+# patient_nbr
+# Save the patient id to identify the patien after analysis
+Patient_Id <- data$patient_nbr
+#  remove unwanted variable
+data <- subset(data, select=-c(patient_nbr))
+```
+
+```{r}
+# race
+table(data$race)
+# AfricanAmerican: 19210, Asian: 641, Caucasian: 76099, Hispanic: 2037, Other: 1506 
+class(data$race)
+data$race <- as.factor(data$race)
+class(data$race)
+```
+
+```{r}
+# gender
+table(data$gender)
+#Female : 54708, Male: 47055, Unknown/Invalid: 3
+class(data$gender)
+data$gender <- replace(data$gender, data$gender == "Unknown/Invalid", NA)
+table(data$gender)
+#convert gender to as.numeric
+summary(factor(data$gender))
+# convert to factor
+data$gender <- as.factor(data$gender)
+# give values 1 and 0 to the factors
+levels(data$gender)<-c(1,0)
+#convert to as.numeric
+data$gender <- as.numeric(levels(data$gender))[data$gender]
+summary(data$gender)
+```
+
+```{r}
+# Age
+table(data$age)
+```
+
+Reducing the levels
+```{r include=FALSE}
+data$age <- replace(data$age, data$age == "[0-10)", "1")
+data$age <- replace(data$age, data$age == "[10-20)", "2")
+data$age <- replace(data$age, data$age == "[20-30)","3")
+data$age <- replace(data$age, data$age == "[30-40)","3")
+data$age <- replace(data$age, data$age == "[40-50)", "4")
+data$age <- replace(data$age, data$age == "[50-60)", "4")
+data$age <- replace(data$age, data$age == "[60-70)", "5")
+data$age <- replace(data$age, data$age == "[70-80)", "6")
+data$age <- replace(data$age, data$age == "[80-90)", "7")
+data$age <- replace(data$age, data$age == "[90-100)", "7")
+```
+
+```{r}
+table(data$age)
+```
+
+```{r}
+ggplot(data, aes(data$age)) + geom_bar()
+data$age <- as.factor(data$age)
+```
+
+```{r}
+# weight
+table(data$weight)
+summary(data$weight)
+sum(is.na(data$weight))
+```
+
+Checking if the data is unbalanced
+```{r}
+ggplot(data, aes(data$weight)) + geom_bar()
+data <- subset(data, select=-c(weight))
+```
+
+```{r}
+#admission_type_id
+table(data$admission_type_id)
+```
+
+Reducing the levels
+```{r include=FALSE}
+data$admission_type_id <- replace(data$admission_type_id, data$admission_type_id == 6, "5")
+data$admission_type_id <- replace(data$admission_type_id, data$admission_type_id == 8, "5")
+data$admission_type_id <- replace(data$admission_type_id, data$admission_type_id == 2, "1")
+```
+
+```{r}
+table(data$admission_type_id)
+data$admission_type_id <- as.factor(data$admission_type_id)
+```
+
+```{r}
+# discharge_disposition_id 1 8 16 17 27 30 
+table(data$discharge_disposition_id)
+```
+
+Reducing the levels, grouping similar discharge dispositions
+```{r include=FALSE}
+# Few are grouped together
+data$discharge_disposition_id <- replace(data$discharge_disposition_id, data$discharge_disposition_id == 1,"group1")
+data$discharge_disposition_id <- replace(data$discharge_disposition_id, data$discharge_disposition_id == 8,"group1")
+data$discharge_disposition_id <- replace(data$discharge_disposition_id, data$discharge_disposition_id == 16,"group1")
+data$discharge_disposition_id <- replace(data$discharge_disposition_id,
+data$discharge_disposition_id == 17,"group1")
+data$discharge_disposition_id <- replace(data$discharge_disposition_id, data$discharge_disposition_id == 27,"group1")
+data$discharge_disposition_id <- replace(data$discharge_disposition_id,
+data$discharge_disposition_id == 30, "group1")
+```
+
+```{r include=FALSE}
+# 2 3 4 5 6 9 10 13 14 15 22 23 24 28 29 # Few are grouped together  
+data$discharge_disposition_id <- replace(data$discharge_disposition_id, data$discharge_disposition_id == 2, "group2")
+data$discharge_disposition_id <- replace(data$discharge_disposition_id, data$discharge_disposition_id == 3, "group2")
+data$discharge_disposition_id <- replace(data$discharge_disposition_id, data$discharge_disposition_id == 4, "group2")
+data$discharge_disposition_id <- replace(data$discharge_disposition_id, data$discharge_disposition_id == 5, "group2")
+data$discharge_disposition_id <- replace(data$discharge_disposition_id, data$discharge_disposition_id == 6, "group2")
+data$discharge_disposition_id <- replace(data$discharge_disposition_id, data$discharge_disposition_id == 9, "group2")
+data$discharge_disposition_id <- replace(data$discharge_disposition_id, data$discharge_disposition_id == 10, "group2")
+data$discharge_disposition_id <- replace(data$discharge_disposition_id, data$discharge_disposition_id == 13, "group2")
+data$discharge_disposition_id <- replace(data$discharge_disposition_id, data$discharge_disposition_id == 14, "group2")
+data$discharge_disposition_id <- replace(data$discharge_disposition_id, data$discharge_disposition_id == 15, "group2")
+data$discharge_disposition_id <- replace(data$discharge_disposition_id, data$discharge_disposition_id == 22, "group2")
+data$discharge_disposition_id <- replace(data$discharge_disposition_id, data$discharge_disposition_id == 23, "group2")
+data$discharge_disposition_id <- replace(data$discharge_disposition_id, data$discharge_disposition_id == 24, "group2")
+data$discharge_disposition_id <- replace(data$discharge_disposition_id, data$discharge_disposition_id == 28, "group2")
+data$discharge_disposition_id <- replace(data$discharge_disposition_id, data$discharge_disposition_id == 29, "group2")
+```
+
+```{r include=FALSE}
+# 7 12 18 25 26 # Few are grouped together reducing the factor levels 
+data$discharge_disposition_id <- replace(data$discharge_disposition_id, data$discharge_disposition_id == 7, "group3") 
+data$discharge_disposition_id <- replace(data$discharge_disposition_id, data$discharge_disposition_id == 12, "group3") 
+data$discharge_disposition_id <- replace(data$discharge_disposition_id, data$discharge_disposition_id == 18, "group3") 
+data$discharge_disposition_id <- replace(data$discharge_disposition_id, data$discharge_disposition_id == 25, "group3") 
+data$discharge_disposition_id <- replace(data$discharge_disposition_id, data$discharge_disposition_id == 26, "group3")   
+```
+
+```{r}
+# 11 19 20 21# Few are grouped together
+data$discharge_disposition_id <- replace(data$discharge_disposition_id, data$discharge_disposition_id == 11, "group4")  
+data$discharge_disposition_id <- replace(data$discharge_disposition_id, data$discharge_disposition_id == 19, "group4")  
+data$discharge_disposition_id <- replace(data$discharge_disposition_id, data$discharge_disposition_id == 20, "group4")  
+data$discharge_disposition_id <- replace(data$discharge_disposition_id, data$discharge_disposition_id == 21, "group4")  
+```
+
+```{r include=FALSE}
+# group1;-60372, group2:-34436, group3:-5306, group4:-1652  # Few are grouped together
+data$discharge_disposition_id <- replace(data$discharge_disposition_id, data$discharge_disposition_id == "group1", "1") 
+data$discharge_disposition_id <- replace(data$discharge_disposition_id, data$discharge_disposition_id == "group2", "2") 
+data$discharge_disposition_id <- replace(data$discharge_disposition_id, data$discharge_disposition_id == "group3", "3") 
+data$discharge_disposition_id <- replace(data$discharge_disposition_id, data$discharge_disposition_id == "group4", "4") 
+```
+
+```{r}
+table(data$discharge_disposition_id)
+summary(data$discharge_disposition_id)
+data$discharge_disposition_id <- as.factor(data$discharge_disposition_id)
+```
+
+```{r}
+# admission_source_id
+table(data$admission_source_id)
+ggplot(data, aes(data$admission_source_id)) + geom_bar()
+```
+
+```{r include=FALSE}
+# 1,2,3,8 # Few are grouped together
+data$admission_source_id <- replace(data$admission_source_id, data$admission_source_id == 1, "group1")
+data$admission_source_id <- replace(data$admission_source_id, data$admission_source_id == 2, "group1")
+data$admission_source_id <- replace(data$admission_source_id, data$admission_source_id == 3, "group1")
+data$admission_source_id <- replace(data$admission_source_id, data$admission_source_id == 8, "group1")
+
+# 4, 5, 6, 7, 10,18, 19 ,22, 25, 26 # Few are grouped together
+data$admission_source_id <- replace(data$admission_source_id, data$admission_source_id == 4, "group2")
+data$admission_source_id <- replace(data$admission_source_id, data$admission_source_id == 5, "group2")
+data$admission_source_id <- replace(data$admission_source_id, data$admission_source_id == 6, "group2")
+data$admission_source_id <- replace(data$admission_source_id, data$admission_source_id == 7, "group2")
+data$admission_source_id <- replace(data$admission_source_id, data$admission_source_id == 10, "group2")
+data$admission_source_id <- replace(data$admission_source_id, data$admission_source_id == 18, "group2")
+data$admission_source_id <- replace(data$admission_source_id, data$admission_source_id == 19, "group2")
+data$admission_source_id <- replace(data$admission_source_id, data$admission_source_id == 22, "group2")
+data$admission_source_id <- replace(data$admission_source_id, data$admission_source_id == 25, "group2")
+data$admission_source_id <- replace(data$admission_source_id, data$admission_source_id == 26, "group2")
+
+# 9, 15, 17, 20, 21 # Few are grouped together
+data$admission_source_id <- replace(data$admission_source_id, data$admission_source_id == 9, "group3")
+data$admission_source_id <- replace(data$admission_source_id, data$admission_source_id == 15, "group3")
+data$admission_source_id <- replace(data$admission_source_id, data$admission_source_id == 17, "group3")
+data$admission_source_id <- replace(data$admission_source_id, data$admission_source_id == 20, "group3")
+data$admission_source_id <- replace(data$admission_source_id, data$admission_source_id == 21, "group3")
+
+# 11, 12, 13, 14, 23, 24 # Few are grouped together
+data$admission_source_id <- replace(data$admission_source_id, data$admission_source_id == 11, "group4")
+data$admission_source_id <- replace(data$admission_source_id, data$admission_source_id == 12, "group4")
+data$admission_source_id <- replace(data$admission_source_id, data$admission_source_id == 13, "group4")
+data$admission_source_id <- replace(data$admission_source_id, data$admission_source_id == 14, "group4")
+data$admission_source_id <- replace(data$admission_source_id, data$admission_source_id == 23, "group4")
+data$admission_source_id <- replace(data$admission_source_id, data$admission_source_id == 24, "group4")
+data$admission_source_id <- replace(data$admission_source_id, data$admission_source_id == "group1", "1")
+data$admission_source_id <- replace(data$admission_source_id, data$admission_source_id == "group2", "2")
+data$admission_source_id <- replace(data$admission_source_id, data$admission_source_id == "group3", "3")
+data$admission_source_id <- replace(data$admission_source_id, data$admission_source_id == "group4", "4")
+```
+
+```{r}
+table(data$admission_source_id)
+data$admission_source_id <- as.factor(data$admission_source_id)
+```
+
+```{r}
+# time_in_hospital
+table(data$time_in_hospital)
+ggplot(data, aes(data$time_in_hospital)) + geom_bar()
+str(data$time_in_hospital)
+```
+
+```{r}
+# Payercode
+ggplot(data, aes(data$payer_code)) + geom_bar()
+ #  remove unwanted variable, not helpful as not patient disease info
+data <- subset(data, select=-c(payer_code))
+```
+
+```{r}
+# medical_specialty
+table(data$medical_specialty)
+ggplot(data, aes(data$medical_specialty)) + geom_bar()
+#  remove unwanted variable
+data <- subset(data, select=-c(medical_specialty))
+```
+
+```{r}
+ggplot(data, aes(data$num_lab_procedures)) + geom_bar()
+
+quantile(data$num_lab_procedures, seq(0,1, 0.01))
+data$num_lab_procedures[data$num_lab_procedures > quantile(data$num_lab_procedures, 0.99)] <- 
+  quantile(data$num_lab_procedures, 0.99)
+ggplot(data, aes(data$num_lab_procedures)) + geom_bar()
+```
+
+```{r}
+ggplot(data, aes(data$num_procedures)) + geom_bar()
+```
+
+```{r}
+ggplot(data, aes(data$num_medications)) + geom_bar()
+quantile(data$num_medications, seq(0,1, 0.01))
+data$num_medications[data$num_medications > quantile(data$num_medications, 0.99)] <- 
+  quantile(data$num_medications, 0.99)
+ggplot(data, aes(data$num_medications)) + geom_bar()
+```
+
+```{r}
+ggplot(data, aes(data$number_outpatient)) + geom_bar()
+```
+
+```{r}
+ggplot(data, aes(data$number_emergency)) + geom_bar()
+
+ggplot(data, aes(data$number_inpatient)) + geom_bar()
+
+ggplot(data, aes(data$number_diagnoses)) + geom_bar()
+```
+
+```{r}
+ggplot(data, aes(data$max_glu_serum)) + geom_bar()
+# A1Cresult compensate for this column
+#  remove unwanted variable
+data <- subset(data, select=-c(max_glu_serum))
+#A1Cresult
+ggplot(data, aes(data$A1Cresult)) + geom_bar()
+ggsave("figs/A1C.png")
+data$A1Cresult <- as.factor(data$A1Cresult)
+```
+
+```{r}
+# remove unwanted variable as this is not taken in to account in this analysis
+
+data <- subset(data, select=-c(metformin,repaglinide,nateglinide,chlorpropamide,glimepiride,
+                        acetohexamide,glipizide,glyburide,tolbutamide,pioglitazone,
+                        rosiglitazone,acarbose,miglitol,troglitazone,tolazamide,examide,
+                        citoglipton,glyburide.metformin,glipizide.metformin,
+                        glimepiride.pioglitazone,metformin.rosiglitazone,
+                        metformin.pioglitazone))
+# head(data)
+```
+
+```{r}
+#change
+ggplot(data, aes(data$change)) + geom_bar()
+data$change <- replace(data$change, data$change == "Ch", "1")
+data$change <- replace(data$change, data$change == "No", "0")
+# convert to factor
+summary(factor(data$change))
+data$change <- as.numeric(data$change)
+str(data$change)
+```
+
+```{r}
+#diabetesMed
+ggplot(data, aes(data$diabetesMed)) + geom_bar()
+data$diabetesMed <- replace(data$diabetesMed, data$diabetesMed == "Yes", "1")
+data$diabetesMed <- replace(data$diabetesMed, data$diabetesMed == "No", "0")
+#convert gender to as.numeric
+summary(factor(data$diabetesMed))
+data$diabetesMed <- as.numeric(data$diabetesMed)
+str(data$diabetesMed)
+```
+
+```{r}
+#readmitted
+ggplot(data, aes(data$readmitted)) + geom_bar()
+data$readmitted <- replace(data$readmitted, data$readmitted == "<30", "YES")
+data$readmitted <- replace(data$readmitted, data$readmitted == ">30", "YES")
+ggplot(data, aes(data$readmitted)) + geom_bar()
+summary(factor(data$readmitted))
+```
+
+Feature engineering
+
+Converting comorbidity conditions to analyseable format
+
+```{r}
+## diab_code <- 250.xx
+## circulatory_code <- 390-459, 785
+## Not diabetic or have BP=0, diabetic alone=1, BP alone=2, both diabetic and BP=3
+
+diagnosis <- data.frame(diag1 = as.character(data$diag_1),
+                        diag2 = as.character(data$diag_2),
+                        diag3 = as.character(data$diag_3),
+                        stringsAsFactors = F)
+str(diagnosis)
+diagnosis[is.na(diagnosis) == T] <- 0
+
+make_comorbidity <- function(x){
+  
+  comorbidity <- character(length = nrow(data))
+  diabetes_code <- "^[2][5][0]"
+  circulatory_code <- "^[3][9][0-9]|^[4][0-5][0-9]"
+  
+  if((str_detect(x[1], diabetes_code) == F & (str_detect(x[2], circulatory_code) == F & str_detect(x[3], circulatory_code) == F)) |
+     (str_detect(x[2], diabetes_code) == F & (str_detect(x[1], circulatory_code) == F & str_detect(x[3], circulatory_code) == F)) |
+     (str_detect(x[3], diabetes_code) == F & (str_detect(x[1], circulatory_code) == F & str_detect(x[2], circulatory_code) == F))){
+    comorbidity <- 0
+  }
+  
+  if((str_detect(x[1], diabetes_code) == T & (str_detect(x[2], circulatory_code) == F & str_detect(x[3], circulatory_code) == F)) |
+     (str_detect(x[2], diabetes_code) == T & (str_detect(x[1], circulatory_code) == F & str_detect(x[3], circulatory_code) == F)) |
+     (str_detect(x[3], diabetes_code) == T & (str_detect(x[1], circulatory_code) == F & str_detect(x[2], circulatory_code) == F))){
+    comorbidity <- 1
+  }
+  
+  if((str_detect(x[1], circulatory_code) == T & (str_detect(x[2], diabetes_code) == F & str_detect(x[3], diabetes_code) == F)) |
+     (str_detect(x[2], circulatory_code) == T & (str_detect(x[1], diabetes_code) == F & str_detect(x[3], diabetes_code) == F)) |
+     (str_detect(x[3], circulatory_code) == T & (str_detect(x[1], diabetes_code) == F & str_detect(x[2], diabetes_code) == F))){
+    comorbidity <- 2
+  }
+  
+  if((str_detect(x[1], diabetes_code) == T & (str_detect(x[2], circulatory_code) == T | str_detect(x[3], circulatory_code) == T)) |
+     (str_detect(x[2], diabetes_code) == T & (str_detect(x[1], circulatory_code) == T | str_detect(x[3], circulatory_code) == T)) |
+     (str_detect(x[3], diabetes_code) == T & (str_detect(x[1], circulatory_code) == T | str_detect(x[2], circulatory_code) == T))){
+    comorbidity <- 3
+  }
+  comorbidity <- ordered(comorbidity, levels = c(0,1,2,3))
+  return(comorbidity)
+}
+data$comorbidity <- apply(diagnosis, 1, make_comorbidity)
+
+# remove diagnosis 
+data$diag_1 <- NULL
+data$diag_2 <- NULL
+data$diag_3 <- NULL
+```
+
+```{r}
+# comorbidity and readmission 
+prop.table(table(data$readmitted, data$comorbidity), margin = 2)
+```
+
+```{r}
+# analyse comorbidity
+ggplot(data, aes(x=comorbidity, y=number_inpatient)) + geom_bar(stat = "identity")
+
+ggplot(data, aes(x=comorbidity, y=number_outpatient)) + geom_bar(stat = "identity")
+
+ggplot(data, aes(x=comorbidity, y=number_emergency)) + geom_bar(stat = "identity")
+
+tapply(data$number_inpatient, data$comorbidity, mean)
+tapply(data$number_emergency, data$comorbidity, mean)
+tapply(data$number_outpatient, data$comorbidity, mean)
+tapply(data$time_in_hospital, data$comorbidity, mean)
+tapply(data$number_diagnoses, data$comorbidity, mean)
+tapply(data$num_lab_procedures, data$comorbidity, mean)
+tapply(data$num_procedures, data$comorbidity, mean)
+tapply(data$num_medications, data$comorbidity, mean)
+```
+
+
+```{r}
+# Analyse A1Cresult
+ggplot(data, aes(x=A1Cresult, y=number_inpatient)) + geom_bar(stat = "identity")
+
+ggplot(data, aes(x=A1Cresult, y=number_outpatient)) + geom_bar(stat = "identity")
+
+ggplot(data, aes(x=A1Cresult, y=number_emergency)) + geom_bar(stat = "identity")
+
+tapply(data$number_inpatient, data$A1Cresult, mean)
+tapply(data$number_outpatient, data$A1Cresult, mean)
+tapply(data$number_emergency, data$A1Cresult, mean)
+```
+
+```{r}
+#Missing values
+sapply(data, function(x) sum(is.na(x)))
+#Percentage of missing values
+colMeans(is.na(data))
+```
+
+```{r}
+# Removing NAs
+# before removing NAs patient ID is joined to the data
+data <- cbind(Patient_Id, data)
+data<-na.omit(data)
+ID <- data$Patient_Id
+data <- data[, 2:21]
+```
+
+Dummay variables are created
+```{r}
+
+# race
+#creating dummy variable for race variable    
+dummy_race <- model.matrix(~race - 1,data=data)
+# Removing the 1st dummy variable
+dummy_race <- dummy_race[,-1]
+# Adding dummy variable of race to data and removing race column
+data <- cbind(data[,-1], dummy_race)
+
+#age
+#creating dummy variable for age variable    
+dummy_age <- model.matrix(~age - 1,data=data)
+# Removing the 1st dummy variable
+dummy_age <- dummy_age[,-1]
+# Adding dummy variable of age to data and removing age column
+data <- cbind(data[,-2], dummy_age)
+
+#admission_type_id
+#creating dummy variable for admission_type_id variable    
+dummy_admission_type_id <- model.matrix(~admission_type_id - 1,data=data)
+# Removing the 1st dummy variable
+dummy_admission_type_id <- dummy_admission_type_id[,-1]
+# Adding dummy variable of admission_type_id to data and removing admission_type_id column
+data <- cbind(data[,-2], dummy_admission_type_id)
+
+#discharge_disposition_id
+#creating dummy variable for discharge_disposition_id variable    
+dummy_discharge_disposition_id <- model.matrix(~discharge_disposition_id - 1,data=data)
+# Removing the 1st dummy variable
+dummy_discharge_disposition_id <- dummy_discharge_disposition_id[,-1]
+# Adding dummy variable of discharge_disposition_id to data and removing discharge_disposition_id column
+data <- cbind(data[,-2], dummy_discharge_disposition_id)
+
+#admission_source_id
+#creating dummy variable for admission_source_id variable    
+dummy_admission_source_id <- model.matrix(~admission_source_id - 1,data=data)
+# Removing the 1st dummy variable
+dummy_admission_source_id <- dummy_admission_source_id[,-1]
+# Adding dummy variable of admission_source_id to data and removing admission_source_id column
+data <- cbind(data[,-2], dummy_admission_source_id)
+
+#A1Cresult
+#creating dummy variable for A1Cresult variable    
+dummy_A1Cresult <- model.matrix(~A1Cresult - 1,data=data)
+# Removing the 1st dummy variable
+dummy_A1Cresult <- dummy_A1Cresult[,-1]
+# Adding dummy variable of A1Cresult to data and removing A1Cresult column
+data <- cbind(data[,-10], dummy_A1Cresult)
+
+#insulin
+#creating dummy variable for insulin variable    
+dummy_insulin <- model.matrix(~insulin - 1,data=data)
+# Removing the 1st dummy variable
+dummy_insulin <- dummy_insulin[,-1]
+# Adding dummy variable of insulin to data and removing insulin column
+data <- cbind(data[,-10], dummy_insulin)
+
+#comorbidity
+#creating dummy variable for comorbidity variable    
+dummy_comorbidity <- model.matrix(~comorbidity - 1,data=data)
+# Removing the 1st dummy variable
+dummy_comorbidity <- dummy_comorbidity[,-1]
+# Adding dummy variable of race to data and removing race column
+data <- cbind(data[,-13], dummy_comorbidity)
+```
+
+```{r include=FALSE}
+# Feature standardisation
+# Normalising continuous features, scaling
+data$time_in_hospital <- scale(data$time_in_hospital)
+data$num_lab_procedures <- scale(data$num_lab_procedures)
+data$num_procedures <- scale(data$num_procedures)
+data$num_medications <- scale(data$num_medications)
+data$number_outpatient <- scale(data$number_outpatient)
+data$number_emergency <- scale(data$number_emergency)
+data$number_inpatient <- scale(data$number_inpatient)
+data$number_diagnoses <- scale(data$number_diagnoses)
+```
+
+```{r}
+# Readmitted is separated and added to the first column in the dataset and removed the older column
+readmitted <- data$readmitted
+data <- cbind(readmitted, data)
+data <- data[,-13]
+# All are numerical variable.
+```
+
+```{r}
+# join the ID of patients
+data <- cbind(ID, data)
+str(data)
+```
